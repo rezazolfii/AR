@@ -36,7 +36,7 @@ def create_color_palette():
         "Angel Blonde 7" : (26, 37, 36),
         "Angel Blonde 5": (24, 25, 75),
         "Angel Blonde 4": (34, 34, 83),
-        "Angel Blonde 2": (43, 13, 77),
+        "Angel Blonde 2": (37, 10, 92),
         "Strawberry Blonde": (25, 65, 85),
         "Auburn": (10, 70, 50),
         "Ginger": (20, 80, 70),
@@ -116,7 +116,7 @@ def remove_small_regions(mask, min_size=50):
 # ----------------------------
 # Process mask with improved edge smoothing
 # ----------------------------
-def create_smooth_mask(mask, blur_size=51, expand_pixels=2):
+def create_smooth_mask(mask, blur_size=91, expand_pixels=1):
     """
     Create a smooth transition mask for natural edges
     
@@ -293,7 +293,7 @@ import cv2
 import numpy as np
 
 def blend_with_original(original, colored_layer, smooth_mask, is_black=False):
-    """Blend colored/textured layer with original using smooth mask, refining lightness blending for natural highlights."""
+    """Blend colored/textured layer with original using smooth mask, refining lightness blending with dynamic contrast."""
     original_lab = cv2.cvtColor(original, cv2.COLOR_BGR2LAB)
     # Ensure colored_layer is in the correct data type before converting to LAB
     colored_lab = cv2.cvtColor(colored_layer.astype(np.uint8), cv2.COLOR_BGR2LAB)
@@ -304,34 +304,38 @@ def blend_with_original(original, colored_layer, smooth_mask, is_black=False):
 
     # Ensure smooth_mask is float and scaled correctly
     smooth_mask_float = smooth_mask.astype(np.float32) / 255.0 if smooth_mask.max() > 1 else smooth_mask.astype(np.float32)
-    mask_bool = smooth_mask > 0
+    mask_bool = smooth_mask > 0.1
 
-    # --- Refined Lightness Blending ---
-    # Blend the original lightness and the colored layer's lightness
-    # Use the smooth mask to control the transition
-    l_blend = (1 - smooth_mask_float) * l_orig.astype(np.float32) + smooth_mask_float * l_col.astype(np.float32)
+    # --- Dynamic Lightness Blending based on Original Hair Brightness ---
 
-    # Optional: Apply a non-linear adjustment to the blended lightness
-    # This can help compress the highlight range and lift the shadow range
-    # tune these parameters based on desired effect
-    # adjusted_l_blend = 255 * (l_blend / 255.0)**0.9 # Example power transform to lift shadows
-    # adjusted_l_blend = 255 * (l_blend / 255.0)**1.1 # Example power transform to compress highlights
-    # l_blend = adjusted_l_blend
+    # Calculate average lightness of original hair in the masked area
+    if np.sum(mask_bool) > 0:
+                avg_orig_l_masked = np.percentile(l_orig[mask_bool], 50) # Use 50th percentile (median)
+    else:
+        avg_orig_l_masked = np.mean(l_orig) # Fallback if mask is empty
 
-    # Another approach: Blend the *difference* from the mean lightness
-    # This tries to preserve the relative contrast of the colored layer
-    # if np.sum(mask_bool) > 0:
-    #     mean_l_col = np.mean(l_col[mask_bool])
-    #     l_col_centered = l_col.astype(np.float32) - mean_l_col
-    #     l_orig_mean_masked = np.mean(l_orig[mask_bool])
-    #     l_blend_centered = (1 - smooth_mask_float) * (l_orig.astype(np.float32) - l_orig_mean_masked) + smooth_mask_float * l_col_centered
-    #     l_blend = l_orig_mean_masked + l_blend_centered # Add back original mean in masked area
+    # Determine power factor dynamically based on original hair lightness
+    # These thresholds and power factors will need tuning
+    dark_threshold = 45  # Below this is considered dark original hair
+    bright_threshold = 150 # Above this is considered bright original hair
 
-    # A blend that favors the original lightness structure more in shadows
-    # while still incorporating the colored lightness
-    # You can experiment with weighted averages or other blending functions
-    # Example: Use a blend factor that varies with the original lightness
-    blend_factor_l = smooth_mask_float * (l_orig.astype(np.float32) / 255.0)**0.5 # More influence of colored in bright areas
+    if avg_orig_l_masked < dark_threshold:
+        # Original hair is dark, apply higher power for more contrast/lift
+        power_factor = 0.2 # Value you found works well for dark hair
+    elif avg_orig_l_masked > bright_threshold:
+        # Original hair is bright, apply lower power to preserve highlights
+        power_factor = 0.7 # Value you found works well for bright hair
+    else:
+        # Original hair is in between, use an intermediate power or interpolate
+        power_factor = 0.5 # Default or interpolated value
+
+
+    # Use a blend factor that varies with the original lightness and the smooth mask
+    # This applies the colored layer's lightness more in areas where the mask is strong
+    # and the original hair is brighter (based on the power factor)
+    blend_factor_l = smooth_mask_float * (l_orig.astype(np.float32) / 255.0)**power_factor
+
+    # Blend the original and colored layer's lightness using the dynamic blend factor
     l_blend = (1 - blend_factor_l) * l_orig.astype(np.float32) + blend_factor_l * l_col.astype(np.float32)
 
 
